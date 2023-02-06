@@ -1,0 +1,203 @@
+---
+title: "Revo analysis"
+output: pdf_document
+date: "2022-12-12"
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This script analyses data from the Revolution trial. 
+
+```{r}
+library(tidyverse)
+library(readr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(rstanarm)
+library(bayesplot)
+library(tidybayes)
+library(brms)
+library(ggfortify)
+library(emmeans)
+library(scico)
+library(BayesFactor)
+#setwd
+revo_data = read.csv("revolution_thesis_data.csv")
+```
+
+#Data selection 
+
+```{r}
+revo_data = filter(revo_data, Timepoint == "T0" | Timepoint == "T1")
+baseline_revo = filter(revo_data, Timepoint == "T0")
+
+baseline_revo$mgps <- as.factor (baseline_revo$mgps)
+baseline_revo$Adiponectin <- baseline_revo$Adiponectin/1000
+baseline_revo$Resistin <- baseline_revo$Resistin/1000
+baseline_revo$Leptin <- baseline_revo$Leptin/1000
+
+#mGPS data
+#change names from 0,1,2 to A,B,C 0
+
+baseline_revo$mgps <- baseline_revo$mgps %>% factor(levels=c("0", "1", "2"), labels=c("A", "B", "C"), ordered = TRUE)
+
+model_data <- subset(baseline_revo, select = c("Adiponectin", "Resistin", "Intelectin", "Leptin", "mgps"))
+model_data <- model_data %>% na.omit()
+
+model_data2 <- subset(baseline_revo, select = c("Adiponectin", "Resistin", "Intelectin", "Leptin", "cachectic_based_on_weight"))
+model_data2 <- model_data2 %>% na.omit()
+
+#cachexia data
+#change names from 0,1 to NC, CC
+
+model_data2$cachectic_based_on_weight <- model_data2$cachectic_based_on_weight %>% factor(levels=c("0", "1"), labels=c("NC", "CC"), ordered = TRUE)
+```
+
+#Ordinal regression
+
+##Can adipokines predict mGPS scores?
+
+```{r}
+
+mgps_mod <- stan_polr(mgps ~ Adiponectin + Resistin + Intelectin + Leptin, data = model_data,
+                      prior = R2(location = 0.5, what = "mean"), seed = 123, method = "probit")
+
+summary(mgps_mod, probs = c(0.05, 0.5, 0.95), digits = 5)
+
+posterior_draws_mgps <- as.matrix(mgps_mod)
+
+mcmc_areas(posterior_draws_mgps, 
+           pars = c("Adiponectin", "Resistin", "Intelectin", "Leptin"),
+           prob = 0.9, area_method = "scaled height", border_size = 0.5, point_est = "none")
+
+
+mgps_values <- as.data.frame(posterior_draws_mgps)
+summary(mgps_values)
+
+mgps_values <- subset(mgps_values, select=c("Adiponectin", "Leptin", "Intelectin", "Resistin"))
+mgps_values <- pivot_longer(mgps_values, 
+                            cols = Adiponectin:Resistin, 
+                            names_to = "adipokine", 
+                            values_to = "values")
+
+div_cols <- scico(4, palette = 'roma')
+
+ggplot(mgps_values, aes(x = values, fill = adipokine)) + 
+  geom_density(alpha = 0.5) + 
+  facet_wrap(~ adipokine, ncol = 1, scales = "free_y",) +
+   tidybayes::stat_halfeye(point_interval = mean_hdi, 
+                          .width = 0.9,
+                          point_size = 2,
+                          interval_size = 7) + 
+  scale_fill_manual(values = div_cols)+
+    theme(axis.text = element_text(size = 20), axis.title=element_text(size=20),
+          panel.border = element_blank(), panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"),
+          panel.background = element_blank(),
+          strip.text.x = element_blank(), # Removes individual title of histograms from facet wrap
+          axis.line.y = element_blank(),
+          axis.text.y = element_blank(),
+          axis.ticks.y = element_blank(),
+          axis.title.y = element_blank()) + 
+    labs(x = "Ordinal regression model coefficients (AU)", y = '') + 
+  guides(fill = guide_legend(title="Adipokine")) + 
+  geom_vline(xintercept = 0.56, color = "red", linewidth = 1, linetype = "dotted") + #mean b_intercept[1]
+  geom_vline(xintercept = 1.07, color = "blue", linewidth = 1, linetype = "dotted") + #mean b_intercept[2]
+  geom_vline(xintercept = 0, color = "grey", linewidth = 1, linetype = "dotted") + 
+  scale_x_continuous(limits = c(-0.5, 1.5), breaks = c(-0.5, 0, 0.5, 1, 1.5))
+
+```
+
+##Can adipokines predict cachexia?
+
+```{r}
+
+cac_mod <- stan_polr(cachectic_based_on_weight ~ Adiponectin + Resistin + Intelectin + Leptin, 
+                     data = model_data2,
+                     prior = R2(location = 0.5, what = "mean"), seed = 123, method = "probit") 
+
+summary(cac_mod, probs = c(0.05, 0.5, 0.95), digits = 5)
+
+posterior_draws_cac <- as.matrix(cac_mod)
+
+mcmc_areas(posterior_draws_cac, 
+           pars = c("Adiponectin", "Resistin", "Intelectin", "Leptin"),
+           prob = 0.9, area_method = "scaled height", border_size = 0.5, point_est = "none")
+
+
+cac_values <- as.data.frame(posterior_draws_cac)
+summary(posterior_draws_cac)
+
+cac_values <- subset(cac_values, select=c("Adiponectin", "Leptin", "Intelectin", "Resistin"))
+cac_values <- pivot_longer(cac_values, 
+                            cols = Adiponectin:Resistin, 
+                            names_to = "adipokine", 
+                            values_to = "values")
+
+div_cols <- scico(4, palette = 'roma')
+
+ggplot(cac_values, aes(x = values, fill = adipokine)) + 
+  geom_density(alpha = 0.5) + 
+  facet_wrap(~ adipokine, ncol = 1, scales = "free_y",) +
+   tidybayes::stat_halfeye(point_interval = mean_hdi, 
+                          .width = 0.9,
+                          point_size = 2,
+                          interval_size = 7) + 
+  scale_fill_manual(values = div_cols)+
+    theme(axis.text = element_text(size = 20), axis.title=element_text(size=20),
+          panel.border = element_blank(), panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"),
+          panel.background = element_blank(),
+          strip.text.x = element_blank(), # Removes individual title of histograms from facet wrap
+          axis.line.y = element_blank(),
+          axis.text.y = element_blank(),
+          axis.ticks.y = element_blank(),
+          axis.title.y = element_blank()) + 
+    labs(x = "Ordinal regression model coefficients (AU)", y = '') + 
+  guides(fill = guide_legend(title="Adipokine")) + 
+  geom_vline(xintercept = -0.46, color = "red", linewidth = 1, linetype = "dotted") + #mean b_intercept[1]
+  geom_vline(xintercept = 0, color = "grey", linewidth = 1, linetype = "dotted") + 
+  scale_x_continuous(limits = c(-0.5, 0.5), breaks = c(-0.5, 0, 0.5))
+```
+
+##Comparing adipokines between timepoints: T0 vs T1
+
+```{r}
+both_tps <- read.csv("t0_t1.csv")
+
+both_tps$Adiponectin <- both_tps$Adiponectin/1000
+both_tps$Resistin <- both_tps$Resistin/1000
+both_tps$Leptin <- both_tps$Leptin/1000
+
+#Adiponectin
+adi <- stan_glm(Adiponectin ~ Timepoint,
+                data = both_tps, seed = 123, prior_PD = TRUE)
+
+summary(adi, probs = c(0.05, 0.5, 0.95))
+
+#Resistin
+
+res <- stan_glm(Resistin ~ Timepoint,
+                data = both_tps, seed = 123, prior_PD = TRUE)
+
+summary(res, probs = c(0.05, 0.5, 0.95))
+
+#Intelectin-1
+
+itln <- stan_glm(Intelectin_ng ~ Timepoint,
+                data = both_tps, seed = 123, prior_PD = TRUE)
+
+summary(itln, probs = c(0.05, 0.5, 0.95))
+
+#Leptin
+
+lep <- stan_glm(Leptin ~ Timepoint,
+                data = both_tps, seed = 123, prior_PD = TRUE)
+
+summary(lep, probs = c(0.05, 0.5, 0.95))
+```
